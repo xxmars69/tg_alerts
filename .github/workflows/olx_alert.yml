@@ -44,6 +44,14 @@ jobs:
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
         run: scrapy crawl watch
 
+      # 2️⃣ Spider OLX – Camera foto
+      - name: Run spider (Camera Foto)
+        env:
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
+
       # 3️⃣ Spider OLX – PSP
       - name: Run spider (PSP)
         env:
