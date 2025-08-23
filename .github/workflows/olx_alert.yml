@@ -36,10 +36,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # 2️⃣ Spider OLX – PS Vita
-      - name: Run spider (PS Vita)
+      # 2️⃣ Spider OLX – SONY
+      - name: Run spider (SONY)
         env:
-          SEARCH_URL:          ${{ secrets.SEARCH_URL }}
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_SONY }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
         run: scrapy crawl watch
@@ -52,10 +52,10 @@ jobs:
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
         run: scrapy crawl watch
 
-      # 3️⃣ Spider OLX – PSP
-      - name: Run spider (PSP)
+      # 3️⃣ Spider OLX – Aparat foto
+      - name: Run spider (APARAT FOTO)
         env:
-          SEARCH_URL:          ${{ secrets.SEARCH_URL_PSP }}
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_APARAT_FOTO }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
         run: scrapy crawl watch
