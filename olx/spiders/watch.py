@@ -1,35 +1,33 @@
-# olx/spiders/watch.py
-import os
-import re
-import json
-import urllib.parse
-import scrapy
+import os, hashlib, json, re, urllib.parse, scrapy
+from pathlib import Path
 
-API_BASE = "https://www.olx.ro/api/v1/offers/"
+SEARCH_URL = os.getenv("SEARCH_URL")
+API_BASE   = "https://www.olx.ro/api/v1/offers/"
 
 def build_api_url(src: str, offset=0, limit=40) -> str:
-    """
-    Transformă un URL OLX de căutare într-un apel API JSON corect.
-    Păstrează parametrii existenți și setează offset/limit.
-    """
+    """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…)."""
     parsed = urllib.parse.urlparse(src)
-    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    params = urllib.parse.parse_qs(parsed.query)
 
-    # Dacă keyword-ul e în path ( /oferte/q-aparat%20foto/ ), extragem și suprascriem în 'query'
+    # Dacă keyword-ul e în path ( /q-ps%20vita/ ), extragem și suprascriem
     m = re.search(r"/q-([^/]+)/", parsed.path)
     if m:
         params["query"] = [urllib.parse.unquote_plus(m.group(1))]
 
-    # compat: vechiul 'q' -> 'query'
+    # API-ul nu recunoaște vechiul „q", doar „query"
     if "q" in params and "query" not in params:
         params["query"] = params.pop("q")
 
-    # paginate
+    # PĂSTRĂM min_id dacă există (pentru a reduce rezultatele la anunțuri noi)
+    # min_id este deja în params dacă e în URL-ul original, nu-l ștergem
+
+    # Paginare
     params["offset"] = [str(offset)]
     params["limit"]  = [str(limit)]
 
-    return f"{API_BASE}?{urllib.parse.urlencode(params, doseq=True)}"
-
+    # Construim URL final
+    query = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
+    return f"{API_BASE}?{query}"
 
 class WatchJsonSpider(scrapy.Spider):
     name = "watch"
@@ -45,93 +43,91 @@ class WatchJsonSpider(scrapy.Spider):
         },
     }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Încărcăm seen IDs pentru verificare rapidă
+        state = Path("state.json")
+        self.seen = set(json.loads(state.read_text())) if state.exists() else set()
+        self.page_count = 0  # Contor pentru pagini
+        self.max_pages = 1  # Maxim 1 pagină (optimizare)
+        self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
+        self.max_consecutive_seen = 10  # Oprește dacă 10 consecutive sunt deja văzute
+
     def start_requests(self):
-        """
-        Citește linkurile din noile secrete:
-        - SEARCH_URL_SONY
-        - SEARCH_URL_CAMERA_FOTO
-        - SEARCH_URL_APARAT_FOTO
-        (și opțional SEARCH_URL)
-        Acceptă și listă separată prin virgulă în oricare dintre ele.
-        """
-        env_names = [
-            "SEARCH_URL_SONY",
-            "SEARCH_URL_CAMERA_FOTO",
-            "SEARCH_URL_APARAT_FOTO",
-            "SEARCH_URL",  # opțional, dacă îl mai folosești
-        ]
-
-        urls = []
-        for name in env_names:
-            raw = os.getenv(name)
-            if not raw:
-                continue
-            parts = [u.strip() for u in raw.split(",") if u.strip()]
-            urls.extend(parts)
-
-        # dedupe păstrând ordinea
-        seen = set()
-        final_urls = []
-        for u in urls:
-            if u not in seen:
-                seen.add(u)
-                final_urls.append(u)
-
-        if not final_urls:
-            self.logger.error(
-                "Nu am găsit niciun link în variabilele: %s",
-                ", ".join(env_names),
-            )
-            return
-
-        for u in final_urls:
-            api_url = build_api_url(u, offset=0, limit=40)
-            yield scrapy.Request(
-                api_url,
-                callback=self.parse_api,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "Mozilla/5.0",
-                },
-            )
+        # Resetăm contoarele la începutul fiecărei căutări
+        self.page_count = 0
+        self.consecutive_seen = 0
+        yield scrapy.Request(
+            build_api_url(SEARCH_URL, offset=0, limit=40),
+            callback=self.parse_api,
+            meta={"page": 1}
+        )
 
     def parse_api(self, response):
-        # Parse JSON în siguranță
+        self.page_count += 1
+        
+        # Verifică dacă am depășit limita de pagini
+        if self.page_count > self.max_pages:
+            self.logger.info(f"Limită de {self.max_pages} pagină atinsă. Oprește paginarea.")
+            return
+
         try:
             data = json.loads(response.text)
         except Exception as e:
             self.logger.error(f"Failed to parse OLX JSON: {e}")
             return
 
-        # Extragem itemele
-        items = data.get("data") or []
-        for offer in items:
-            oid = offer.get("id")
-            uid = str(oid) if oid is not None else None
-            title = (offer.get("title") or "").strip()
-
+        items_in_page = 0
+        new_items = 0
+        
+        for offer in data.get("data", []):
+            uid = str(offer.get("id"))
+            title = offer.get("title", "").strip()
             link = offer.get("url")
-            if isinstance(link, str) and link.startswith("/"):
-                link = urllib.parse.urljoin("https://www.olx.ro", link)
-
-            p = offer.get("price") or {}
-            price_val = p.get("display_value") or p.get("value") or ""
-            currency  = p.get("currency") or ""
-            price = f"{price_val} {currency}".strip() if (price_val or currency) else None
-
+            price = (
+                offer["price"]["value"]["display"]
+                if offer.get("price") and offer["price"].get("value")
+                else None
+            )
+            
             if uid and title and link:
-                yield {"id": uid, "title": title, "price": price, "link": link}
+                items_in_page += 1
+                
+                # Verifică dacă e deja văzut
+                if uid in self.seen:
+                    self.consecutive_seen += 1
+                    self.logger.debug(f"Anunț {uid} deja văzut. Consecutive seen: {self.consecutive_seen}")
+                    
+                    # Dacă 10 consecutive sunt deja văzute, oprește
+                    if self.consecutive_seen >= self.max_consecutive_seen:
+                        self.logger.info(
+                            f"Oprește paginarea: {self.consecutive_seen} anunțuri consecutive "
+                            f"deja văzute (limită: {self.max_consecutive_seen})"
+                        )
+                        return
+                else:
+                    # Resetăm contorul când găsim unul nou
+                    self.consecutive_seen = 0
+                    new_items += 1
+                    yield {"id": uid, "title": title, "price": price, "link": link}
+                    # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
+                    self.seen.add(uid)
 
-        # Paginare: links.next poate fi dict/list/str
-        next_link = (data.get("links") or {}).get("next")
-        if isinstance(next_link, dict):
-            next_link = next_link.get("href")
-        elif isinstance(next_link, (list, tuple)) and next_link:
-            next_link = next_link[0]
+        self.logger.info(
+            f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
+            f"{new_items} noi, {items_in_page - new_items} deja văzute"
+        )
 
-        if isinstance(next_link, str) and next_link:
+        # Verifică dacă trebuie să continuăm paginarea
+        if self.consecutive_seen >= self.max_consecutive_seen:
+            self.logger.info("Oprește paginarea: prea multe anunțuri consecutive deja văzute")
+            return
+
+        # Pagina următoare (doar dacă nu am atins limita)
+        next_link = data.get("links", {}).get("next")
+        if next_link and self.page_count < self.max_pages:
             yield scrapy.Request(
-                response.urljoin(next_link),
+                next_link,
                 callback=self.parse_api,
-                headers=response.request.headers,
+                meta={"page": self.page_count + 1}
             )

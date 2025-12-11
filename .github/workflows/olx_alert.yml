@@ -11,7 +11,7 @@ jobs:
     # nu anulăm un job aflat în derulare (deduplicarea are nevoie să termine)
     concurrency:
       group: olx-alerts         # același grup → un singur job simultan
-      cancel-in-progress: false
+      cancel-in-progress: false # <-- ADĂUGAT: nu tăia un run în curs
 
     runs-on: ubuntu-latest
 
@@ -24,6 +24,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
+          # key obligatoriu (nu trebuie să existe); restore-keys caută cea mai nouă potrivire
           key: dummy
           restore-keys: |
             olx-state-
@@ -32,12 +33,12 @@ jobs:
       - name: Show state BEFORE
         run: |
           if [ -f state.json ]; then
-            echo "✅ state.json exists BEFORE. Size:" $(wc -c < state.json)
+            echo "state.json exists BEFORE. Size:" $(wc -c < state.json)
             echo "Preview:"
             head -c 200 state.json || true
             echo ""
           else
-            echo "⚠️ state.json NOT FOUND (fresh run)"
+            echo "state.json NOT FOUND (fresh run)"
           fi
 
       - name: Set up Python
@@ -48,34 +49,62 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Rulează spider-ul cu toate URL-urile configurate
-      - name: Run spider (all searches)
+      # 1️⃣ Spider OLX – Canon
+      - name: Run spider (Canon)
         env:
-          SEARCH_URL:              ${{ secrets.SEARCH_URL }}
-          SEARCH_URL_SONY:         ${{ secrets.SEARCH_URL_SONY }}
-          SEARCH_URL_APARAT_FOTO:  ${{ secrets.SEARCH_URL_APARAT_FOTO }}
-          SEARCH_URL_CAMERA_FOTO:  ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
-          SEARCH_URL_PSP:          ${{ secrets.SEARCH_URL_PSP }}
-          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch -s LOG_LEVEL=INFO
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_CANON }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
 
-      # 🔍 DEBUG: inspectăm fișierul după rulari
-      - name: Inspect state.json
+      # 2️⃣ Spider OLX – Nikon
+      - name: Run spider (Nikon)
+        env:
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_NIKON }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
+
+      # 3️⃣ Spider OLX – Sony
+      - name: Run spider (Sony)
+        env:
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_SONY }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
+
+      # 4️⃣ Spider OLX – Aparat foto
+      - name: Run spider (Aparat Foto)
+        env:
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_APARAT_FOTO }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
+
+      # 5️⃣ Spider OLX – Camera foto
+      - name: Run spider (Camera Foto)
+        env:
+          SEARCH_URL:          ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: scrapy crawl watch
+
+      # 🔍 DEBUG: vezi cum arată după rulari
+      - name: Show state AFTER
         run: |
           if [ -f state.json ]; then
-            echo "✅ state.json exists AFTER. Size:" $(wc -c < state.json)
-            echo "Preview (primele 500 caractere):"
-            head -c 500 state.json || true
+            echo "state.json exists AFTER. Size:" $(wc -c < state.json)
+            echo "Preview:"
+            head -c 200 state.json || true
             echo ""
           else
-            echo "⚠️ state.json missing AFTER runs!"
+            echo "state.json missing AFTER runs (unexpected)"
           fi
 
       # 4️⃣ SAVE — încărcăm state.json actualizat în cache (cheie unică pe run_id)
       - name: Save state cache
         uses: actions/cache/save@v4
-        if: always()
+        if: always()            # rulează chiar dacă spiderul găsește 0 item-uri
         with:
           path: state.json
           key: olx-state-${{ github.run_id }}
