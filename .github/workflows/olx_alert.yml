@@ -48,28 +48,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # 2️⃣ Spider OLX – SONY
-      - name: Run spider (SONY)
+      # Rulează spider-ul cu toate URL-urile configurate
+      - name: Run spider (all searches)
         env:
-          SEARCH_URL:          ${{ secrets.SEARCH_URL_SONY }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch -s LOG_LEVEL=INFO
-
-      # 2️⃣ Spider OLX – Camera foto
-      - name: Run spider (Camera Foto)
-        env:
-          SEARCH_URL:          ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch -s LOG_LEVEL=INFO
-
-      # 3️⃣ Spider OLX – Aparat foto
-      - name: Run spider (Aparat Foto)
-        env:
-          SEARCH_URL:          ${{ secrets.SEARCH_URL_APARAT_FOTO }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEARCH_URL:              ${{ secrets.SEARCH_URL }}
+          SEARCH_URL_SONY:         ${{ secrets.SEARCH_URL_SONY }}
+          SEARCH_URL_APARAT_FOTO:  ${{ secrets.SEARCH_URL_APARAT_FOTO }}
+          SEARCH_URL_CAMERA_FOTO:  ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
+          SEARCH_URL_PSP:          ${{ secrets.SEARCH_URL_PSP }}
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
         run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 🔍 DEBUG: inspectăm fișierul după rulari
