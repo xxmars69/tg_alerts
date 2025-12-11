@@ -1,5 +1,6 @@
 import os, hashlib, json, re, urllib.parse, scrapy
 from pathlib import Path
+from datetime import datetime, timedelta
 
 SEARCH_URL = os.getenv("SEARCH_URL")
 API_BASE   = "https://www.olx.ro/api/v1/offers/"
@@ -52,6 +53,9 @@ class WatchJsonSpider(scrapy.Spider):
         self.max_pages = 1  # Maxim 1 pagină (optimizare)
         self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
         self.max_consecutive_seen = 10  # Oprește dacă 10 consecutive sunt deja văzute
+        
+        # Filtrare după data publicării: doar anunțuri din ultimele 30 de minute
+        self.min_time = datetime.now() - timedelta(minutes=30)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -79,6 +83,7 @@ class WatchJsonSpider(scrapy.Spider):
 
         items_in_page = 0
         new_items = 0
+        skipped_old = 0  # Contor pentru anunțuri prea vechi
         
         for offer in data.get("data", []):
             uid = str(offer.get("id"))
@@ -92,6 +97,40 @@ class WatchJsonSpider(scrapy.Spider):
             
             if uid and title and link:
                 items_in_page += 1
+                
+                # Verifică data publicării anunțului
+                offer_time = None
+                # Încearcă să extragă data din diferite câmpuri posibile
+                for date_field in ["created_time", "created_at", "date", "published_at", "last_refresh_time"]:
+                    if offer.get(date_field):
+                        try:
+                            # Poate fi timestamp (int) sau string ISO
+                            timestamp = offer[date_field]
+                            if isinstance(timestamp, (int, float)):
+                                offer_time = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp)
+                            elif isinstance(timestamp, str):
+                                # Încearcă să parseze diferite formate
+                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
+                                    try:
+                                        offer_time = datetime.strptime(timestamp.split("+")[0].split("Z")[0], fmt)
+                                        break
+                                    except:
+                                        continue
+                            if offer_time:
+                                break
+                        except Exception as e:
+                            self.logger.debug(f"Failed to parse date field {date_field}: {e}")
+                            continue
+                
+                # Dacă nu am găsit data, logăm un warning dar permitem anunțul (pentru a nu pierde anunțuri valide)
+                if not offer_time:
+                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării. Câmpuri disponibile: {list(offer.keys())[:10]}")
+                    # Permitem anunțul dacă nu putem determina data (pentru siguranță)
+                elif offer_time < self.min_time:
+                    # Anunțul e prea vechi, îl ignorăm
+                    skipped_old += 1
+                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi (data: {offer_time}, minim: {self.min_time})")
+                    continue
                 
                 # Verifică dacă e deja văzut
                 if uid in self.seen:
@@ -109,13 +148,14 @@ class WatchJsonSpider(scrapy.Spider):
                     # Resetăm contorul când găsim unul nou
                     self.consecutive_seen = 0
                     new_items += 1
-                    yield {"id": uid, "title": title, "price": price, "link": link}
+                    yield {"id": uid, "title": title, "price": price, "link": link, "created_time": offer_time.isoformat()}
                     # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
                     self.seen.add(uid)
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi, {items_in_page - new_items} deja văzute"
+            f"{new_items} noi (din ultimele 30 min), {items_in_page - new_items - skipped_old} deja văzute, "
+            f"{skipped_old} prea vechi (ignorate)"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
