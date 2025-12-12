@@ -55,7 +55,7 @@ jobs:
           SEARCH_URL:          ${{ secrets.SEARCH_URL_CANON }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch
+        run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 2️⃣ Spider OLX – Nikon
       - name: Run spider (Nikon)
@@ -63,7 +63,7 @@ jobs:
           SEARCH_URL:          ${{ secrets.SEARCH_URL_NIKON }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch
+        run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 3️⃣ Spider OLX – Sony
       - name: Run spider (Sony)
@@ -71,7 +71,7 @@ jobs:
           SEARCH_URL:          ${{ secrets.SEARCH_URL_SONY }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch
+        run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 4️⃣ Spider OLX – Aparat foto
       - name: Run spider (Aparat Foto)
@@ -79,7 +79,7 @@ jobs:
           SEARCH_URL:          ${{ secrets.SEARCH_URL_APARAT_FOTO }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch
+        run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 5️⃣ Spider OLX – Camera foto
       - name: Run spider (Camera Foto)
@@ -87,7 +87,7 @@ jobs:
           SEARCH_URL:          ${{ secrets.SEARCH_URL_CAMERA_FOTO }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: scrapy crawl watch
+        run: scrapy crawl watch -s LOG_LEVEL=INFO
 
       # 🔍 DEBUG: vezi cum arată după rulari
       - name: Show state AFTER

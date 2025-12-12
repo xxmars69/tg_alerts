@@ -5,6 +5,22 @@ from datetime import datetime, timedelta
 SEARCH_URL = os.getenv("SEARCH_URL")
 API_BASE   = "https://www.olx.ro/api/v1/offers/"
 
+def get_category_from_url(url: str) -> str:
+    """Extrage categoria din URL (canon, nikon, sony, aparat_foto, camera_foto)"""
+    url_lower = url.lower()
+    if "canon" in url_lower:
+        return "canon"
+    elif "nikon" in url_lower:
+        return "nikon"
+    elif "sony" in url_lower:
+        return "sony"
+    elif "aparat%20foto" in url_lower or "aparat-foto" in url_lower or "aparat foto" in url_lower:
+        return "aparat_foto"
+    elif "camera%20foto" in url_lower or "camera-foto" in url_lower or "camera foto" in url_lower:
+        return "camera_foto"
+    else:
+        return "unknown"
+
 def build_api_url(src: str, offset=0, limit=40) -> str:
     """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…)."""
     parsed = urllib.parse.urlparse(src)
@@ -46,22 +62,37 @@ class WatchJsonSpider(scrapy.Spider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Încărcăm seen IDs pentru verificare rapidă
+        # Identifică categoria din SEARCH_URL
+        self.category = get_category_from_url(SEARCH_URL or "")
+        self.logger.info(f"🔍 Categoria identificată: {self.category}")
+        
+        # Încărcăm seen IDs pentru categoria respectivă
         state = Path("state.json")
         if state.exists():
             try:
                 data = json.loads(state.read_text())
-                # Compatibilitate: dacă e listă simplă de ID-uri, convertim
-                if isinstance(data, list) and len(data) > 0:
-                    if isinstance(data[0], str):
-                        # Format vechi: doar ID-uri
+                # Format nou: dicționar cu categorii
+                if isinstance(data, dict):
+                    category_data = data.get(self.category, [])
+                    if isinstance(category_data, list) and len(category_data) > 0:
+                        if isinstance(category_data[0], str):
+                            # Format vechi: doar ID-uri
+                            self.seen = set(category_data)
+                        else:
+                            # Format nou: listă de dicționare cu ID și timestamp
+                            self.seen = {item["id"] for item in category_data if isinstance(item, dict) and "id" in item}
+                    else:
+                        self.seen = set()
+                # Compatibilitate: format vechi (listă simplă)
+                elif isinstance(data, list):
+                    if len(data) > 0 and isinstance(data[0], str):
                         self.seen = set(data)
                     else:
-                        # Format nou: listă de dicționare cu ID și timestamp
                         self.seen = {item["id"] for item in data if isinstance(item, dict) and "id" in item}
                 else:
                     self.seen = set()
-            except:
+            except Exception as e:
+                self.logger.warning(f"Eroare la încărcarea state.json: {e}")
                 self.seen = set()
         else:
             self.seen = set()
@@ -165,14 +196,21 @@ class WatchJsonSpider(scrapy.Spider):
                     # Resetăm contorul când găsim unul nou
                     self.consecutive_seen = 0
                     new_items += 1
-                    yield {"id": uid, "title": title, "price": price, "link": link, "created_time": offer_time.isoformat()}
+                    yield {
+                        "id": uid, 
+                        "title": title, 
+                        "price": price, 
+                        "link": link, 
+                        "created_time": offer_time.isoformat(),
+                        "category": self.category  # Adăugăm categoria pentru pipeline
+                    }
                     # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
                     self.seen.add(uid)
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
             f"{new_items} noi (din ultimele 30 min), {items_in_page - new_items - skipped_old} deja văzute, "
-            f"{skipped_old} prea vechi (ignorate)"
+            f"{skipped_old} prea vechi (ignorate), timp minim: {self.min_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
