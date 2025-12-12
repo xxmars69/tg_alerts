@@ -121,3 +121,4 @@ Cea mai bună soluție este **Opțiunea 4** - folosește `min_id` din URL-uri:
 Vrei să implementez una dintre aceste optimizări?
 
 
+

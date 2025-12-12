@@ -48,7 +48,24 @@ class WatchJsonSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         # Încărcăm seen IDs pentru verificare rapidă
         state = Path("state.json")
-        self.seen = set(json.loads(state.read_text())) if state.exists() else set()
+        if state.exists():
+            try:
+                data = json.loads(state.read_text())
+                # Compatibilitate: dacă e listă simplă de ID-uri, convertim
+                if isinstance(data, list) and len(data) > 0:
+                    if isinstance(data[0], str):
+                        # Format vechi: doar ID-uri
+                        self.seen = set(data)
+                    else:
+                        # Format nou: listă de dicționare cu ID și timestamp
+                        self.seen = {item["id"] for item in data if isinstance(item, dict) and "id" in item}
+                else:
+                    self.seen = set()
+            except:
+                self.seen = set()
+        else:
+            self.seen = set()
+        
         self.page_count = 0  # Contor pentru pagini
         self.max_pages = 1  # Maxim 1 pagină (optimizare)
         self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
