@@ -63,13 +63,25 @@ class TelegramPipeline:
         if item["id"] not in self.seen:
             text = f"🆕 [{category.upper()}] {item['title']} – {item['price'] or 'fără preț'}\n{item['link']}"
             try:
-                response = requests.get(
-                    f"https://api.telegram.org/bot{self.token}/sendMessage",
-                    params={"chat_id": self.chat_id, "text": text},
-                    timeout=10,
-                )
-                response.raise_for_status()
-                spider.logger.info(f"✅ Notificare trimisă pentru anunț {item['id']} ({category}): {item['title'][:50]}...")
+                # Retry logic pentru Telegram API
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(
+                            f"https://api.telegram.org/bot{self.token}/sendMessage",
+                            params={"chat_id": self.chat_id, "text": text},
+                            timeout=10,
+                        )
+                        response.raise_for_status()
+                        spider.logger.info(f"✅ Notificare trimisă pentru anunț {item['id']} ({category}): {item['title'][:50]}...")
+                        break  # Success, exit retry loop
+                    except requests.exceptions.RequestException as e:
+                        if attempt < max_retries - 1:
+                            spider.logger.warning(f"⚠️ Tentativă {attempt + 1}/{max_retries} eșuată pentru Telegram: {e}. Reîncercare...")
+                            import time
+                            time.sleep(2 ** attempt)  # Exponential backoff
+                        else:
+                            raise  # Re-raise on last attempt
                 
                 # Adăugăm anunțul nou în listă cu timestamp
                 timestamp = item.get("created_time") or datetime.now().isoformat()

@@ -51,6 +51,10 @@ class WatchJsonSpider(scrapy.Spider):
     custom_settings = {
         "ITEM_PIPELINES": {"pipelines.TelegramPipeline": 300},
         "DOWNLOAD_DELAY": 1,
+        "RETRY_ENABLED": True,
+        "RETRY_TIMES": 3,
+        "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429],
+        "HTTPERROR_ALLOWED_CODES": [429],  # Allow rate limit errors to be retried
         "DEFAULT_REQUEST_HEADERS": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -123,10 +127,19 @@ class WatchJsonSpider(scrapy.Spider):
             self.logger.info(f"Limită de {self.max_pages} pagină atinsă. Oprește paginarea.")
             return
 
+        # Verifică status code
+        if response.status != 200:
+            self.logger.warning(f"Status code {response.status} pentru {response.url}")
+            # Retry automat dacă e configurat
+            return
+
         try:
             data = json.loads(response.text)
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse OLX JSON: {e}. Response: {response.text[:200]}")
+            return
         except Exception as e:
-            self.logger.error(f"Failed to parse OLX JSON: {e}")
+            self.logger.error(f"Unexpected error parsing response: {e}")
             return
 
         items_in_page = 0
