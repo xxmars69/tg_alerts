@@ -159,21 +159,23 @@ class WatchJsonSpider(scrapy.Spider):
             if uid and title and link:
                 items_in_page += 1
                 
-                # Verifică data publicării anunțului
                 offer_time = None
-                # Încearcă să extragă data din diferite câmpuri posibile
-                for date_field in ["created_time", "created_at", "date", "published_at", "last_refresh_time"]:
-                    if offer.get(date_field):
+                date_fields = ["created_time", "created_at", "createdTime", "createdAt", "date", "published_at", "publishedAt", "last_refresh_time", "lastRefreshTime"]
+                for date_field in date_fields:
+                    value = offer.get(date_field)
+                    if not value and isinstance(offer, dict):
+                        for key in offer.keys():
+                            if key.lower() == date_field.lower():
+                                value = offer[key]
+                                break
+                    if value:
                         try:
-                            # Poate fi timestamp (int) sau string ISO
-                            timestamp = offer[date_field]
-                            if isinstance(timestamp, (int, float)):
-                                offer_time = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp)
-                            elif isinstance(timestamp, str):
-                                # Încearcă să parseze diferite formate
-                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
+                            if isinstance(value, (int, float)):
+                                offer_time = datetime.fromtimestamp(value / 1000 if value > 1e10 else value)
+                            elif isinstance(value, str):
+                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"]:
                                     try:
-                                        offer_time = datetime.strptime(timestamp.split("+")[0].split("Z")[0], fmt)
+                                        offer_time = datetime.strptime(value.split("+")[0].split("Z")[0], fmt)
                                         break
                                     except:
                                         continue
@@ -183,12 +185,11 @@ class WatchJsonSpider(scrapy.Spider):
                             self.logger.debug(f"Failed to parse date field {date_field}: {e}")
                             continue
                 
-                # Dacă nu am găsit data, logăm un warning dar permitem anunțul (pentru a nu pierde anunțuri valide)
                 if not offer_time:
-                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării. Câmpuri disponibile: {list(offer.keys())[:10]}")
-                    # Permitem anunțul dacă nu putem determina data (pentru siguranță)
+                    skipped_old += 1
+                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării, ignorat. Câmpuri disponibile: {list(offer.keys())[:10]}")
+                    continue
                 elif offer_time < self.min_time:
-                    # Anunțul e prea vechi, îl ignorăm
                     skipped_old += 1
                     self.logger.debug(f"Anunț {uid} ignorat: prea vechi (data: {offer_time}, minim: {self.min_time})")
                     continue
