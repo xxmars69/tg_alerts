@@ -1,4 +1,4 @@
-import os, hashlib, json, re, urllib.parse, scrapy
+import os, json, re, urllib.parse, scrapy
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -214,8 +214,8 @@ class WatchJsonSpider(scrapy.Spider):
                         "title": title, 
                         "price": price, 
                         "link": link, 
-                        "created_time": offer_time.isoformat(),
-                        "category": self.category  # Adăugăm categoria pentru pipeline
+                        "created_time": offer_time.isoformat() if offer_time else datetime.now().isoformat(),
+                        "category": self.category
                     }
                     # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
                     self.seen.add(uid)
