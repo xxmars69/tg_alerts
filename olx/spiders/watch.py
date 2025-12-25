@@ -106,8 +106,7 @@ class WatchJsonSpider(scrapy.Spider):
         self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
         self.max_consecutive_seen = 10  # Oprește dacă 10 consecutive sunt deja văzute
         
-        # Filtrare după data publicării: doar anunțuri din ultimele 30 de minute
-        self.min_time = datetime.now() - timedelta(minutes=30)
+        self.min_time = datetime.now() - timedelta(hours=1)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -223,7 +222,7 @@ class WatchJsonSpider(scrapy.Spider):
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi (din ultimele 30 min), {items_in_page - new_items - skipped_old} deja văzute, "
+            f"{new_items} noi (din ultimele 1h), {items_in_page - new_items - skipped_old} deja văzute, "
             f"{skipped_old} prea vechi (ignorate), timp minim: {self.min_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
