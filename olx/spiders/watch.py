@@ -1,6 +1,6 @@
 import os, json, re, urllib.parse, scrapy
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 SEARCH_URL = os.getenv("SEARCH_URL")
 API_BASE   = "https://www.olx.ro/api/v1/offers/"
@@ -118,6 +118,7 @@ class WatchJsonSpider(scrapy.Spider):
         self.max_pages = 2
         self.consecutive_seen = 0
         self.max_consecutive_seen = 30
+        self.max_age_hours = 6  # Ignoră anunțurile mai vechi de 6 ore
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -168,6 +169,10 @@ class WatchJsonSpider(scrapy.Spider):
 
         items_in_page = 0
         new_items = 0
+        skipped_old = 0
+        
+        # Calculăm timpul minim acceptat (ultimele X ore)
+        min_time = datetime.now() - timedelta(hours=self.max_age_hours)
         
         for offer in data.get("data", []):
             uid = str(offer.get("id"))
@@ -203,6 +208,18 @@ class WatchJsonSpider(scrapy.Spider):
                         except:
                             continue
                 
+                # FILTRU DE TIMP: Ignoră anunțurile mai vechi de X ore
+                if offer_time and offer_time < min_time:
+                    skipped_old += 1
+                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi ({offer_time.strftime('%Y-%m-%d %H:%M')}, minim: {min_time.strftime('%Y-%m-%d %H:%M')})")
+                    continue
+                
+                # Dacă nu s-a putut determina data, ignorăm (safety check)
+                if not offer_time:
+                    skipped_old += 1
+                    self.logger.debug(f"Anunț {uid} ignorat: nu s-a putut determina data")
+                    continue
+                
                 # DEDUPLICARE LOCALĂ: Verifică dacă e deja văzut (mecanism principal)
                 if uid in self.seen:
                     self.consecutive_seen += 1
@@ -232,7 +249,8 @@ class WatchJsonSpider(scrapy.Spider):
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi, {items_in_page - new_items} deja văzute"
+            f"{new_items} noi, {items_in_page - new_items - skipped_old} deja văzute, "
+            f"{skipped_old} prea vechi/ignorate (minim: {min_time.strftime('%Y-%m-%d %H:%M')})"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
