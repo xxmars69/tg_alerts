@@ -101,12 +101,12 @@ class WatchJsonSpider(scrapy.Spider):
         else:
             self.seen = set()
         
-        self.page_count = 0  # Contor pentru pagini
-        self.max_pages = 1  # Maxim 1 pagină (optimizare)
-        self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
-        self.max_consecutive_seen = 10  # Oprește dacă 10 consecutive sunt deja văzute
+        self.page_count = 0
+        self.max_pages = 3
+        self.consecutive_seen = 0
+        self.max_consecutive_seen = 20
         
-        self.min_time = datetime.now() - timedelta(hours=1)
+        self.min_time = datetime.now() - timedelta(minutes=10)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -190,7 +190,8 @@ class WatchJsonSpider(scrapy.Spider):
                     continue
                 elif offer_time < self.min_time:
                     skipped_old += 1
-                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi (data: {offer_time}, minim: {self.min_time})")
+                    age_minutes = (datetime.now() - offer_time).total_seconds() / 60
+                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi ({age_minutes:.1f} min, minim: {self.min_time.strftime('%H:%M:%S')})")
                     continue
                 
                 # Verifică dacă e deja văzut
@@ -206,9 +207,10 @@ class WatchJsonSpider(scrapy.Spider):
                         )
                         return
                 else:
-                    # Resetăm contorul când găsim unul nou
                     self.consecutive_seen = 0
                     new_items += 1
+                    age_minutes = (datetime.now() - offer_time).total_seconds() / 60
+                    self.logger.info(f"✅ Anunț nou {uid}: {title[:50]}... (vârstă: {age_minutes:.1f} min)")
                     yield {
                         "id": uid, 
                         "title": title, 
@@ -217,12 +219,11 @@ class WatchJsonSpider(scrapy.Spider):
                         "created_time": offer_time.isoformat() if offer_time else datetime.now().isoformat(),
                         "category": self.category
                     }
-                    # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
                     self.seen.add(uid)
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi (din ultimele 1h), {items_in_page - new_items - skipped_old} deja văzute, "
+            f"{new_items} noi (din ultimele 10 min), {items_in_page - new_items - skipped_old} deja văzute, "
             f"{skipped_old} prea vechi (ignorate), timp minim: {self.min_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 

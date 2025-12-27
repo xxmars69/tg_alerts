@@ -29,7 +29,7 @@ class TelegramPipeline:
         if isinstance(category_list, list) and len(category_list) > 0:
             if isinstance(category_list[0], str):
                 category_list = [{"id": id, "timestamp": datetime.now().isoformat()} for id in category_list]
-            category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]
+            category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
         else:
             category_list = []
         
@@ -72,7 +72,7 @@ class TelegramPipeline:
                 category_list.append({"id": item["id"], "timestamp": timestamp})
                 self.seen.add(item["id"])
                 
-                category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]
+                category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
                 self.state_data[category] = category_list
                 
                 self.seen = {item["id"] for item in category_list if isinstance(item, dict) and "id" in item}
@@ -94,7 +94,7 @@ class TelegramPipeline:
                 if sid not in self.seen:
                     category_list.append({"id": sid, "timestamp": datetime.now().isoformat()})
         
-        category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]
+        category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
         self.state_data[category] = category_list
         
         self.state_file.write_text(json.dumps(self.state_data, indent=2))
