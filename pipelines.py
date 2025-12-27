@@ -1,4 +1,4 @@
-import os, json, requests
+import os, json, requests, time
 from pathlib import Path
 from datetime import datetime
 
@@ -9,6 +9,8 @@ class TelegramPipeline:
         self.state_file = Path("state.json")
         
         self.category = getattr(spider, 'category', 'unknown')
+        self.last_message_time = 0
+        self.message_delay = 0.5
         
         if self.state_file.exists():
             try:
@@ -49,6 +51,11 @@ class TelegramPipeline:
         if item["id"] not in self.seen:
             text = f"🆕 [{category.upper()}] {item['title']} – {item['price'] or 'fără preț'}\n{item['link']}"
             try:
+                current_time = time.time()
+                time_since_last = current_time - self.last_message_time
+                if time_since_last < self.message_delay:
+                    time.sleep(self.message_delay - time_since_last)
+                
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
@@ -58,12 +65,16 @@ class TelegramPipeline:
                             timeout=10,
                         )
                         response.raise_for_status()
+                        self.last_message_time = time.time()
                         spider.logger.info(f"✅ Notificare trimisă pentru anunț {item['id']} ({category}): {item['title'][:50]}...")
                         break
                     except requests.exceptions.RequestException as e:
-                        if attempt < max_retries - 1:
+                        if "429" in str(e) or "Too Many Requests" in str(e):
+                            retry_delay = 10 + (attempt * 5)
+                            spider.logger.warning(f"⚠️ Rate limit Telegram (429). Aștept {retry_delay}s înainte de retry {attempt + 1}/{max_retries}...")
+                            time.sleep(retry_delay)
+                        elif attempt < max_retries - 1:
                             spider.logger.warning(f"⚠️ Tentativă {attempt + 1}/{max_retries} eșuată pentru Telegram: {e}. Reîncercare...")
-                            import time
                             time.sleep(2 ** attempt)
                         else:
                             raise
