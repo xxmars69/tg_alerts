@@ -21,7 +21,7 @@ def get_category_from_url(url: str) -> str:
     else:
         return "unknown"
 
-def build_api_url(src: str, offset=0, limit=60) -> str:
+def build_api_url(src: str, offset=0, limit=40) -> str:
     """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…).
     Nu folosește min_id - se bazează pe deduplicare locală."""
     parsed = urllib.parse.urlparse(src)
@@ -37,9 +37,12 @@ def build_api_url(src: str, offset=0, limit=60) -> str:
         params["query"] = params.pop("q")
 
     # ELIMINĂM min_id - nu mai folosim ca mecanism principal
-    # Ne bazăm pe deduplicare locală (state.json)
     if "min_id" in params:
         params.pop("min_id")
+    
+    # ELIMINĂM reason=observed_search (poate necesita min_id sau nu e acceptat fără el)
+    if "reason" in params:
+        params.pop("reason")
 
     # FORȚĂM sortarea pe "cele mai noi" (newest first)
     params["sort"] = ["created_at:desc"]
@@ -48,9 +51,9 @@ def build_api_url(src: str, offset=0, limit=60) -> str:
     if "search[order]" in params:
         params.pop("search[order]")
 
-    # Paginare
+    # Paginare - limit maxim 40 (standard OLX API)
     params["offset"] = [str(offset)]
-    params["limit"]  = [str(limit)]
+    params["limit"]  = [str(min(limit, 40))]
 
     # Construim URL final
     query = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
@@ -64,7 +67,7 @@ class WatchJsonSpider(scrapy.Spider):
         "RETRY_ENABLED": True,
         "RETRY_TIMES": 3,
         "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429],
-        "HTTPERROR_ALLOWED_CODES": [429],  # Allow rate limit errors to be retried
+        "HTTPERROR_ALLOWED_CODES": [400, 429],  # Allow 400 to log error details
         "DEFAULT_REQUEST_HEADERS": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -120,12 +123,16 @@ class WatchJsonSpider(scrapy.Spider):
         # Resetăm contoarele la începutul fiecărei căutări
         self.page_count = 0
         self.consecutive_seen = 0
-        # Primele 2 pagini, 60 rezultate per pagină = 120 rezultate totale (sliding window)
-        yield scrapy.Request(
-            build_api_url(SEARCH_URL, offset=0, limit=60),
+        # Primele 2 pagini, 40 rezultate per pagină = 80 rezultate totale (sliding window)
+        request = scrapy.Request(
+            build_api_url(SEARCH_URL, offset=0, limit=40),
             callback=self.parse_api,
             meta={"page": 1}
         )
+        # Elimină Content-Type dacă există (cauză comună de 400 Bad Request pe GET)
+        if "Content-Type" in request.headers:
+            del request.headers["Content-Type"]
+        yield request
 
     def parse_api(self, response):
         self.page_count += 1
@@ -135,10 +142,19 @@ class WatchJsonSpider(scrapy.Spider):
             self.logger.info(f"Limită de {self.max_pages} pagină atinsă. Oprește paginarea.")
             return
 
-        # Verifică status code
+        # Verifică status code și loghează detalii pentru 400
         if response.status != 200:
-            self.logger.warning(f"Status code {response.status} pentru {response.url}")
-            # Retry automat dacă e configurat
+            error_msg = f"Status code {response.status} pentru {response.url}"
+            if response.status == 400:
+                # Loghează body-ul răspunsului pentru a vedea ce spune OLX
+                try:
+                    error_body = response.text[:500] if hasattr(response, 'text') else str(response.body[:500])
+                    error_msg += f"\n📋 Body răspuns 400: {error_body}"
+                    self.logger.error(error_msg)
+                except:
+                    self.logger.error(f"{error_msg}\n📋 Body (raw): {response.body[:500] if hasattr(response, 'body') else 'N/A'}")
+            else:
+                self.logger.warning(error_msg)
             return
 
         try:
@@ -233,8 +249,12 @@ class WatchJsonSpider(scrapy.Spider):
                 next_url = next_link
             
             if next_url:
-                yield scrapy.Request(
+                request = scrapy.Request(
                     next_url,
                     callback=self.parse_api,
                     meta={"page": self.page_count + 1}
                 )
+                # Elimină Content-Type dacă există (cauză comună de 400 Bad Request pe GET)
+                if "Content-Type" in request.headers:
+                    del request.headers["Content-Type"]
+                yield request
