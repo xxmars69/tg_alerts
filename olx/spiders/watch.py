@@ -1,6 +1,6 @@
 import os, json, re, urllib.parse, scrapy
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 SEARCH_URL = os.getenv("SEARCH_URL")
 API_BASE   = "https://www.olx.ro/api/v1/offers/"
@@ -112,8 +112,6 @@ class WatchJsonSpider(scrapy.Spider):
         self.max_pages = 3
         self.consecutive_seen = 0
         self.max_consecutive_seen = 20
-        
-        self.min_time = datetime.now() - timedelta(minutes=10)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -195,10 +193,6 @@ class WatchJsonSpider(scrapy.Spider):
                     skipped_old += 1
                     self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării, ignorat. Câmpuri disponibile: {list(offer.keys())[:10]}")
                     continue
-                elif offer_time < self.min_time:
-                    skipped_old += 1
-                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi (minim: {self.min_time.strftime('%H:%M:%S')})")
-                    continue
                 
                 # Verifică dacă e deja văzut
                 if uid in self.seen:
@@ -228,8 +222,8 @@ class WatchJsonSpider(scrapy.Spider):
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi (din ultimele 10 min), {items_in_page - new_items - skipped_old} deja văzute, "
-            f"{skipped_old} prea vechi (ignorate), timp minim: {self.min_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"{new_items} noi, {items_in_page - new_items - skipped_old} deja văzute, "
+            f"{skipped_old} fără dată (ignorate)"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
