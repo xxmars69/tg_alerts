@@ -197,8 +197,7 @@ class WatchJsonSpider(scrapy.Spider):
                     continue
                 elif offer_time < self.min_time:
                     skipped_old += 1
-                    age_minutes = (datetime.now() - offer_time).total_seconds() / 60
-                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi ({age_minutes:.1f} min, minim: {self.min_time.strftime('%H:%M:%S')})")
+                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi (minim: {self.min_time.strftime('%H:%M:%S')})")
                     continue
                 
                 # Verifică dacă e deja văzut
@@ -216,8 +215,7 @@ class WatchJsonSpider(scrapy.Spider):
                 else:
                     self.consecutive_seen = 0
                     new_items += 1
-                    age_minutes = (datetime.now() - offer_time).total_seconds() / 60
-                    self.logger.info(f"✅ Anunț nou {uid}: {title[:50]}... (vârstă: {age_minutes:.1f} min)")
+                    self.logger.info(f"✅ Anunț nou {uid}: {title[:50]}...")
                     yield {
                         "id": uid, 
                         "title": title, 
