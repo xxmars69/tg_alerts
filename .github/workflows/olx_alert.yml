@@ -2,7 +2,7 @@ name: OLX Telegram Alerts
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/3 * * * *"
   workflow_dispatch:
 
 jobs:
