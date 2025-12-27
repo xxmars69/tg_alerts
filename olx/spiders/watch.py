@@ -21,8 +21,9 @@ def get_category_from_url(url: str) -> str:
     else:
         return "unknown"
 
-def build_api_url(src: str, offset=0, limit=40) -> str:
-    """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…)."""
+def build_api_url(src: str, offset=0, limit=60) -> str:
+    """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…).
+    Nu folosește min_id - se bazează pe deduplicare locală."""
     parsed = urllib.parse.urlparse(src)
     params = urllib.parse.parse_qs(parsed.query)
 
@@ -35,8 +36,10 @@ def build_api_url(src: str, offset=0, limit=40) -> str:
     if "q" in params and "query" not in params:
         params["query"] = params.pop("q")
 
-    # PĂSTRĂM min_id dacă există (pentru a reduce rezultatele la anunțuri noi)
-    # min_id este deja în params dacă e în URL-ul original, nu-l ștergem
+    # ELIMINĂM min_id - nu mai folosim ca mecanism principal
+    # Ne bazăm pe deduplicare locală (state.json)
+    if "min_id" in params:
+        params.pop("min_id")
 
     # FORȚĂM sortarea pe "cele mai noi" (newest first)
     params["sort"] = ["created_at:desc"]
@@ -109,16 +112,17 @@ class WatchJsonSpider(scrapy.Spider):
             self.seen = set()
         
         self.page_count = 0
-        self.max_pages = 3
+        self.max_pages = 2
         self.consecutive_seen = 0
-        self.max_consecutive_seen = 20
+        self.max_consecutive_seen = 30
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
         self.page_count = 0
         self.consecutive_seen = 0
+        # Primele 2 pagini, 60 rezultate per pagină = 120 rezultate totale (sliding window)
         yield scrapy.Request(
-            build_api_url(SEARCH_URL, offset=0, limit=40),
+            build_api_url(SEARCH_URL, offset=0, limit=60),
             callback=self.parse_api,
             meta={"page": 1}
         )
@@ -148,7 +152,6 @@ class WatchJsonSpider(scrapy.Spider):
 
         items_in_page = 0
         new_items = 0
-        skipped_old = 0  # Contor pentru anunțuri prea vechi
         
         for offer in data.get("data", []):
             uid = str(offer.get("id"))
@@ -163,21 +166,17 @@ class WatchJsonSpider(scrapy.Spider):
             if uid and title and link:
                 items_in_page += 1
                 
+                # Extragem timestamp pentru logging (opțional)
                 offer_time = None
-                date_fields = ["created_time", "created_at", "createdTime", "createdAt", "date", "published_at", "publishedAt", "last_refresh_time", "lastRefreshTime"]
+                date_fields = ["created_time", "created_at", "createdTime", "createdAt"]
                 for date_field in date_fields:
                     value = offer.get(date_field)
-                    if not value and isinstance(offer, dict):
-                        for key in offer.keys():
-                            if key.lower() == date_field.lower():
-                                value = offer[key]
-                                break
                     if value:
                         try:
                             if isinstance(value, (int, float)):
                                 offer_time = datetime.fromtimestamp(value / 1000 if value > 1e10 else value)
                             elif isinstance(value, str):
-                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"]:
+                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"]:
                                     try:
                                         offer_time = datetime.strptime(value.split("+")[0].split("Z")[0], fmt)
                                         break
@@ -185,21 +184,15 @@ class WatchJsonSpider(scrapy.Spider):
                                         continue
                             if offer_time:
                                 break
-                        except Exception as e:
-                            self.logger.debug(f"Failed to parse date field {date_field}: {e}")
+                        except:
                             continue
                 
-                if not offer_time:
-                    skipped_old += 1
-                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării, ignorat. Câmpuri disponibile: {list(offer.keys())[:10]}")
-                    continue
-                
-                # Verifică dacă e deja văzut
+                # DEDUPLICARE LOCALĂ: Verifică dacă e deja văzut (mecanism principal)
                 if uid in self.seen:
                     self.consecutive_seen += 1
                     self.logger.debug(f"Anunț {uid} deja văzut. Consecutive seen: {self.consecutive_seen}")
                     
-                    # Dacă 10 consecutive sunt deja văzute, oprește
+                    # Dacă multe consecutive sunt deja văzute, oprește paginarea
                     if self.consecutive_seen >= self.max_consecutive_seen:
                         self.logger.info(
                             f"Oprește paginarea: {self.consecutive_seen} anunțuri consecutive "
@@ -207,6 +200,7 @@ class WatchJsonSpider(scrapy.Spider):
                         )
                         return
                 else:
+                    # ANUNȚ NOU - trimite pe Telegram
                     self.consecutive_seen = 0
                     new_items += 1
                     self.logger.info(f"✅ Anunț nou {uid}: {title[:50]}...")
@@ -222,8 +216,7 @@ class WatchJsonSpider(scrapy.Spider):
 
         self.logger.info(
             f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi, {items_in_page - new_items - skipped_old} deja văzute, "
-            f"{skipped_old} fără dată (ignorate)"
+            f"{new_items} noi, {items_in_page - new_items} deja văzute"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
