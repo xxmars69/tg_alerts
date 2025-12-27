@@ -38,6 +38,13 @@ def build_api_url(src: str, offset=0, limit=40) -> str:
     # PĂSTRĂM min_id dacă există (pentru a reduce rezultatele la anunțuri noi)
     # min_id este deja în params dacă e în URL-ul original, nu-l ștergem
 
+    # FORȚĂM sortarea pe "cele mai noi" (newest first)
+    params["sort"] = ["created_at:desc"]
+    if "order" in params:
+        params.pop("order")
+    if "search[order]" in params:
+        params.pop("search[order]")
+
     # Paginare
     params["offset"] = [str(offset)]
     params["limit"]  = [str(limit)]
