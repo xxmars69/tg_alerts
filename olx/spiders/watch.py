@@ -242,8 +242,14 @@ class WatchJsonSpider(scrapy.Spider):
         # Pagina următoare (doar dacă nu am atins limita)
         next_link = data.get("links", {}).get("next")
         if next_link and self.page_count < self.max_pages:
-            yield scrapy.Request(
-                next_link,
-                callback=self.parse_api,
-                meta={"page": self.page_count + 1}
-            )
+            if isinstance(next_link, dict):
+                next_url = next_link.get("href") or next_link.get("url") or next_link.get("link")
+            else:
+                next_url = next_link
+            
+            if next_url:
+                yield scrapy.Request(
+                    next_url,
+                    callback=self.parse_api,
+                    meta={"page": self.page_count + 1}
+                )
