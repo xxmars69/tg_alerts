@@ -2,7 +2,7 @@ name: OLX Telegram Alerts
 
 on:
   schedule:
-    - cron: "*/3 * * * *"
+    - cron: "*/5 * * * *"  # La fiecare 5 minute (minim recomandat de GitHub)
   workflow_dispatch:
 
 jobs:
