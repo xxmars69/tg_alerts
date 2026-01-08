@@ -1,6 +1,6 @@
 import os, json, requests, time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class TelegramPipeline:
     def open_spider(self, spider):
@@ -10,7 +10,7 @@ class TelegramPipeline:
         
         self.category = getattr(spider, 'category', 'unknown')
         self.last_message_time = 0
-        self.message_delay = 0.5
+        self.message_delay = 0.5  # Delay între mesaje pentru a evita rate limiting
         
         if self.state_file.exists():
             try:
@@ -31,7 +31,14 @@ class TelegramPipeline:
         if isinstance(category_list, list) and len(category_list) > 0:
             if isinstance(category_list[0], str):
                 category_list = [{"id": id, "timestamp": datetime.now().isoformat()} for id in category_list]
-            category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
+            # Cleanup: șterge anunțurile mai vechi de 7 zile
+            cutoff_time = datetime.now() - timedelta(days=7)
+            category_list = [
+                item for item in category_list 
+                if isinstance(item, dict) and item.get("timestamp") and 
+                datetime.fromisoformat(item.get("timestamp", "")) > cutoff_time
+            ]
+            category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:1000]
         else:
             category_list = []
         
@@ -51,6 +58,7 @@ class TelegramPipeline:
         if item["id"] not in self.seen:
             text = f"🆕 [{category.upper()}] {item['title']} – {item['price'] or 'fără preț'}\n{item['link']}"
             try:
+                # Delay între mesaje pentru a evita rate limiting
                 current_time = time.time()
                 time_since_last = current_time - self.last_message_time
                 if time_since_last < self.message_delay:
@@ -70,7 +78,7 @@ class TelegramPipeline:
                         break
                     except requests.exceptions.RequestException as e:
                         if "429" in str(e) or "Too Many Requests" in str(e):
-                            retry_delay = 10 + (attempt * 5)
+                            retry_delay = 10 + (attempt * 5)  # Delay mai mare pentru 429
                             spider.logger.warning(f"⚠️ Rate limit Telegram (429). Aștept {retry_delay}s înainte de retry {attempt + 1}/{max_retries}...")
                             time.sleep(retry_delay)
                         elif attempt < max_retries - 1:
@@ -83,7 +91,14 @@ class TelegramPipeline:
                 category_list.append({"id": item["id"], "timestamp": timestamp})
                 self.seen.add(item["id"])
                 
-                category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
+                # Cleanup: șterge anunțurile mai vechi de 7 zile
+                cutoff_time = datetime.now() - timedelta(days=7)
+                category_list = [
+                    item for item in category_list 
+                    if isinstance(item, dict) and item.get("timestamp") and 
+                    datetime.fromisoformat(item.get("timestamp", "")) > cutoff_time
+                ]
+                category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:1000]
                 self.state_data[category] = category_list
                 
                 self.seen = {item["id"] for item in category_list if isinstance(item, dict) and "id" in item}
@@ -105,8 +120,15 @@ class TelegramPipeline:
                 if sid not in self.seen:
                     category_list.append({"id": sid, "timestamp": datetime.now().isoformat()})
         
-        category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:100]
+        # Cleanup: șterge anunțurile mai vechi de 7 zile
+        cutoff_time = datetime.now() - timedelta(days=7)
+        category_list = [
+            item for item in category_list 
+            if isinstance(item, dict) and item.get("timestamp") and 
+            datetime.fromisoformat(item.get("timestamp", "")) > cutoff_time
+        ]
+        category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:1000]
         self.state_data[category] = category_list
         
         self.state_file.write_text(json.dumps(self.state_data, indent=2))
-        spider.logger.info(f"💾 Salvat state.json pentru categoria {category}: {len(category_list)} anunțuri")
+        spider.logger.info(f"💾 Salvat state.json pentru categoria {category}: {len(category_list)} anunțuri (max 1000)")

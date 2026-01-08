@@ -22,8 +22,7 @@ def get_category_from_url(url: str) -> str:
         return "unknown"
 
 def build_api_url(src: str, offset=0, limit=40) -> str:
-    """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…).
-    Nu folosește min_id - se bazează pe deduplicare locală."""
+    """Transformă un URL OLX de căutare într-un apel API JSON corect (query=…)."""
     parsed = urllib.parse.urlparse(src)
     params = urllib.parse.parse_qs(parsed.query)
 
@@ -36,24 +35,12 @@ def build_api_url(src: str, offset=0, limit=40) -> str:
     if "q" in params and "query" not in params:
         params["query"] = params.pop("q")
 
-    # ELIMINĂM min_id - nu mai folosim ca mecanism principal
-    if "min_id" in params:
-        params.pop("min_id")
-    
-    # ELIMINĂM reason=observed_search (poate necesita min_id sau nu e acceptat fără el)
-    if "reason" in params:
-        params.pop("reason")
+    # PĂSTRĂM min_id dacă există (pentru a reduce rezultatele la anunțuri noi)
+    # min_id este deja în params dacă e în URL-ul original, nu-l ștergem
 
-    # FORȚĂM sortarea pe "cele mai noi" (newest first)
-    params["sort"] = ["created_at:desc"]
-    if "order" in params:
-        params.pop("order")
-    if "search[order]" in params:
-        params.pop("search[order]")
-
-    # Paginare - limit maxim 40 (standard OLX API)
+    # Paginare
     params["offset"] = [str(offset)]
-    params["limit"]  = [str(min(limit, 40))]
+    params["limit"]  = [str(limit)]
 
     # Construim URL final
     query = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
@@ -67,7 +54,7 @@ class WatchJsonSpider(scrapy.Spider):
         "RETRY_ENABLED": True,
         "RETRY_TIMES": 3,
         "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429],
-        "HTTPERROR_ALLOWED_CODES": [400, 429],  # Allow 400 to log error details
+        "HTTPERROR_ALLOWED_CODES": [429],  # Allow rate limit errors to be retried
         "DEFAULT_REQUEST_HEADERS": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -114,26 +101,23 @@ class WatchJsonSpider(scrapy.Spider):
         else:
             self.seen = set()
         
-        self.page_count = 0
-        self.max_pages = 2
-        self.consecutive_seen = 0
-        self.max_consecutive_seen = 30
-        self.max_age_hours = 6  # Ignoră anunțurile mai vechi de 6 ore
+        self.page_count = 0  # Contor pentru pagini
+        self.max_pages = 2  # Maxim 2 pagini (80 anunțuri)
+        self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
+        self.max_consecutive_seen = 30  # Oprește dacă 30 consecutive sunt deja văzute
+        
+        # Filtrare după data publicării: doar anunțuri din ultimele 2 ore
+        self.min_time = datetime.now() - timedelta(hours=2)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
         self.page_count = 0
         self.consecutive_seen = 0
-        # Primele 2 pagini, 40 rezultate per pagină = 80 rezultate totale (sliding window)
-        request = scrapy.Request(
+        yield scrapy.Request(
             build_api_url(SEARCH_URL, offset=0, limit=40),
             callback=self.parse_api,
             meta={"page": 1}
         )
-        # Elimină Content-Type dacă există (cauză comună de 400 Bad Request pe GET)
-        if "Content-Type" in request.headers:
-            del request.headers["Content-Type"]
-        yield request
 
     def parse_api(self, response):
         self.page_count += 1
@@ -143,19 +127,10 @@ class WatchJsonSpider(scrapy.Spider):
             self.logger.info(f"Limită de {self.max_pages} pagină atinsă. Oprește paginarea.")
             return
 
-        # Verifică status code și loghează detalii pentru 400
+        # Verifică status code
         if response.status != 200:
-            error_msg = f"Status code {response.status} pentru {response.url}"
-            if response.status == 400:
-                # Loghează body-ul răspunsului pentru a vedea ce spune OLX
-                try:
-                    error_body = response.text[:500] if hasattr(response, 'text') else str(response.body[:500])
-                    error_msg += f"\n📋 Body răspuns 400: {error_body}"
-                    self.logger.error(error_msg)
-                except:
-                    self.logger.error(f"{error_msg}\n📋 Body (raw): {response.body[:500] if hasattr(response, 'body') else 'N/A'}")
-            else:
-                self.logger.warning(error_msg)
+            self.logger.warning(f"Status code {response.status} pentru {response.url}")
+            # Retry automat dacă e configurat
             return
 
         try:
@@ -169,10 +144,9 @@ class WatchJsonSpider(scrapy.Spider):
 
         items_in_page = 0
         new_items = 0
-        skipped_old = 0
-        
-        # Calculăm timpul minim acceptat (ultimele X ore)
-        min_time = datetime.now() - timedelta(hours=self.max_age_hours)
+        skipped_old = 0  # Contor pentru anunțuri prea vechi
+        no_date_count = 0  # Contor pentru anunțuri fără dată
+        new_ids = []  # Listă cu ID-urile anunțurilor noi
         
         for offer in data.get("data", []):
             uid = str(offer.get("id"))
@@ -187,45 +161,47 @@ class WatchJsonSpider(scrapy.Spider):
             if uid and title and link:
                 items_in_page += 1
                 
-                # Extragem timestamp pentru logging (opțional)
+                # Verifică data publicării anunțului
                 offer_time = None
-                date_fields = ["created_time", "created_at", "createdTime", "createdAt"]
-                for date_field in date_fields:
-                    value = offer.get(date_field)
-                    if value:
+                # Încearcă să extragă data din diferite câmpuri posibile
+                for date_field in ["created_time", "created_at", "date", "published_at", "last_refresh_time"]:
+                    if offer.get(date_field):
                         try:
-                            if isinstance(value, (int, float)):
-                                offer_time = datetime.fromtimestamp(value / 1000 if value > 1e10 else value)
-                            elif isinstance(value, str):
-                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"]:
+                            # Poate fi timestamp (int) sau string ISO
+                            timestamp = offer[date_field]
+                            if isinstance(timestamp, (int, float)):
+                                offer_time = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp)
+                            elif isinstance(timestamp, str):
+                                # Încearcă să parseze diferite formate
+                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
                                     try:
-                                        offer_time = datetime.strptime(value.split("+")[0].split("Z")[0], fmt)
+                                        offer_time = datetime.strptime(timestamp.split("+")[0].split("Z")[0], fmt)
                                         break
                                     except:
                                         continue
                             if offer_time:
                                 break
-                        except:
+                        except Exception as e:
+                            self.logger.debug(f"Failed to parse date field {date_field}: {e}")
                             continue
                 
-                # FILTRU DE TIMP: Ignoră anunțurile mai vechi de X ore
-                if offer_time and offer_time < min_time:
-                    skipped_old += 1
-                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi ({offer_time.strftime('%Y-%m-%d %H:%M')}, minim: {min_time.strftime('%Y-%m-%d %H:%M')})")
-                    continue
-                
-                # Dacă nu s-a putut determina data, ignorăm (safety check)
+                # Dacă nu am găsit data, logăm un warning dar permitem anunțul (pentru a nu pierde anunțuri valide)
                 if not offer_time:
+                    no_date_count += 1
+                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării. Câmpuri disponibile: {list(offer.keys())[:10]}")
+                    # Permitem anunțul dacă nu putem determina data (pentru siguranță)
+                elif offer_time < self.min_time:
+                    # Anunțul e prea vechi, îl ignorăm
                     skipped_old += 1
-                    self.logger.debug(f"Anunț {uid} ignorat: nu s-a putut determina data")
+                    self.logger.debug(f"Anunț {uid} ignorat: prea vechi (data: {offer_time.strftime('%Y-%m-%d %H:%M')}, minim: {self.min_time.strftime('%Y-%m-%d %H:%M')})")
                     continue
                 
-                # DEDUPLICARE LOCALĂ: Verifică dacă e deja văzut (mecanism principal)
+                # Verifică dacă e deja văzut
                 if uid in self.seen:
                     self.consecutive_seen += 1
                     self.logger.debug(f"Anunț {uid} deja văzut. Consecutive seen: {self.consecutive_seen}")
                     
-                    # Dacă multe consecutive sunt deja văzute, oprește paginarea
+                    # Dacă 10 consecutive sunt deja văzute, oprește
                     if self.consecutive_seen >= self.max_consecutive_seen:
                         self.logger.info(
                             f"Oprește paginarea: {self.consecutive_seen} anunțuri consecutive "
@@ -233,24 +209,30 @@ class WatchJsonSpider(scrapy.Spider):
                         )
                         return
                 else:
-                    # ANUNȚ NOU - trimite pe Telegram
+                    # Resetăm contorul când găsim unul nou
                     self.consecutive_seen = 0
                     new_items += 1
-                    self.logger.info(f"✅ Anunț nou {uid}: {title[:50]}...")
+                    new_ids.append(uid)
                     yield {
                         "id": uid, 
                         "title": title, 
                         "price": price, 
                         "link": link, 
                         "created_time": offer_time.isoformat() if offer_time else datetime.now().isoformat(),
-                        "category": self.category
+                        "category": self.category  # Adăugăm categoria pentru pipeline
                     }
+                    # Adăugăm imediat în seen pentru a evita duplicatele în aceeași sesiune
                     self.seen.add(uid)
 
+        # Logging îmbunătățit cu statistici detaliate
+        new_ids_preview = new_ids[:5] if new_ids else []
         self.logger.info(
-            f"Pagina {self.page_count}: {items_in_page} anunțuri procesate, "
-            f"{new_items} noi, {items_in_page - new_items - skipped_old} deja văzute, "
-            f"{skipped_old} prea vechi/ignorate (minim: {min_time.strftime('%Y-%m-%d %H:%M')})"
+            f"[{self.category.upper()}] Pagina {self.page_count}: {items_in_page} anunțuri procesate\n"
+            f"  ✅ {new_items} noi găsite" + (f" (primele: {new_ids_preview})" if new_ids_preview else "") + "\n"
+            f"  ⏭️ {items_in_page - new_items - skipped_old - no_date_count} deja văzute (seen set: {len(self.seen)} anunțuri)\n"
+            f"  ⏰ {skipped_old} prea vechi (ignorate, minim: {self.min_time.strftime('%Y-%m-%d %H:%M')})\n"
+            f"  ⚠️ {no_date_count} fără dată (procesate pentru siguranță)\n"
+            f"  📊 Consecutive seen: {self.consecutive_seen}/{self.max_consecutive_seen}"
         )
 
         # Verifică dacă trebuie să continuăm paginarea
@@ -261,18 +243,15 @@ class WatchJsonSpider(scrapy.Spider):
         # Pagina următoare (doar dacă nu am atins limita)
         next_link = data.get("links", {}).get("next")
         if next_link and self.page_count < self.max_pages:
+            # Extrage URL-ul dacă next_link e dicționar
             if isinstance(next_link, dict):
                 next_url = next_link.get("href") or next_link.get("url") or next_link.get("link")
             else:
                 next_url = next_link
             
             if next_url:
-                request = scrapy.Request(
+                yield scrapy.Request(
                     next_url,
                     callback=self.parse_api,
                     meta={"page": self.page_count + 1}
                 )
-                # Elimină Content-Type dacă există (cauză comună de 400 Bad Request pe GET)
-                if "Content-Type" in request.headers:
-                    del request.headers["Content-Type"]
-                yield request
