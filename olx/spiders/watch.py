@@ -35,9 +35,6 @@ def build_api_url(src: str, offset=0, limit=40) -> str:
     if "q" in params and "query" not in params:
         params["query"] = params.pop("q")
 
-    # PĂSTRĂM min_id dacă există (pentru a reduce rezultatele la anunțuri noi)
-    # min_id este deja în params dacă e în URL-ul original, nu-l ștergem
-
     # Paginare
     params["offset"] = [str(offset)]
     params["limit"]  = [str(limit)]
@@ -45,6 +42,78 @@ def build_api_url(src: str, offset=0, limit=40) -> str:
     # Construim URL final
     query = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
     return f"{API_BASE}?{query}"
+
+def try_parse_date(value):
+    """Încearcă să parseze o valoare ca dată/timestamp"""
+    if value is None:
+        return None
+    
+    try:
+        # Timestamp numeric (milisecunde sau secunde)
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value / 1000 if value > 1e10 else value)
+        
+        # String ISO format
+        if isinstance(value, str):
+            # Elimină timezone info pentru parsing
+            clean_value = value.split("+")[0].split("Z")[0].split(".")[0]
+            
+            # Formate comune
+            formats = [
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d",
+                "%d/%m/%Y %H:%M:%S",
+                "%d-%m-%Y %H:%M:%S",
+            ]
+            
+            for fmt in formats:
+                try:
+                    return datetime.strptime(clean_value, fmt)
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    
+    return None
+
+def find_date_in_offer(offer, depth=0, max_depth=3):
+    """Caută recursiv data în offer și sub-obiecte (case-insensitive)"""
+    if depth > max_depth or not isinstance(offer, dict):
+        return None
+    
+    # Listă de câmpuri posibile (case-insensitive)
+    date_keywords = ["created", "date", "published", "timestamp", "time", "refresh", "updated"]
+    
+    # Caută direct în cheile din offer
+    for key, value in offer.items():
+        if value is None:
+            continue
+            
+        key_lower = str(key).lower()
+        
+        # Verifică dacă cheia conține un keyword de dată
+        if any(keyword in key_lower for keyword in date_keywords):
+            parsed_date = try_parse_date(value)
+            if parsed_date:
+                return parsed_date
+        
+        # Dacă valoarea e un dicționar, caută recursiv
+        if isinstance(value, dict):
+            nested_date = find_date_in_offer(value, depth + 1, max_depth)
+            if nested_date:
+                return nested_date
+        
+        # Dacă valoarea e o listă de dicționare, caută în ele
+        elif isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+            for item in value[:2]:  # Verifică doar primele 2 elemente
+                nested_date = find_date_in_offer(item, depth + 1, max_depth)
+                if nested_date:
+                    return nested_date
+    
+    return None
 
 class WatchJsonSpider(scrapy.Spider):
     name = "watch"
@@ -69,6 +138,9 @@ class WatchJsonSpider(scrapy.Spider):
         # Identifică categoria din SEARCH_URL
         self.category = get_category_from_url(SEARCH_URL or "")
         self.logger.info(f"🔍 Categoria identificată: {self.category}")
+        
+        if self.category == "unknown":
+            self.logger.warning(f"⚠️ SEARCH_URL nu conține categorie cunoscută: {SEARCH_URL or 'None'}")
         
         # Încărcăm seen IDs pentru categoria respectivă
         state = Path("state.json")
@@ -106,8 +178,8 @@ class WatchJsonSpider(scrapy.Spider):
         self.consecutive_seen = 0  # Contor pentru anunțuri consecutive deja văzute
         self.max_consecutive_seen = 30  # Oprește dacă 30 consecutive sunt deja văzute
         
-        # Filtrare după data publicării: doar anunțuri din ultimele 2 ore
-        self.min_time = datetime.now() - timedelta(hours=2)
+        # Filtrare după data publicării: doar anunțuri din ultimele 4 ore
+        self.min_time = datetime.now() - timedelta(hours=4)
 
     def start_requests(self):
         # Resetăm contoarele la începutul fiecărei căutări
@@ -161,34 +233,13 @@ class WatchJsonSpider(scrapy.Spider):
             if uid and title and link:
                 items_in_page += 1
                 
-                # Verifică data publicării anunțului
-                offer_time = None
-                # Încearcă să extragă data din diferite câmpuri posibile
-                for date_field in ["created_time", "created_at", "date", "published_at", "last_refresh_time"]:
-                    if offer.get(date_field):
-                        try:
-                            # Poate fi timestamp (int) sau string ISO
-                            timestamp = offer[date_field]
-                            if isinstance(timestamp, (int, float)):
-                                offer_time = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp)
-                            elif isinstance(timestamp, str):
-                                # Încearcă să parseze diferite formate
-                                for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
-                                    try:
-                                        offer_time = datetime.strptime(timestamp.split("+")[0].split("Z")[0], fmt)
-                                        break
-                                    except:
-                                        continue
-                            if offer_time:
-                                break
-                        except Exception as e:
-                            self.logger.debug(f"Failed to parse date field {date_field}: {e}")
-                            continue
+                # Extragere dată îmbunătățită (case-insensitive, nested, camelCase)
+                offer_time = find_date_in_offer(offer)
                 
                 # Dacă nu am găsit data, logăm un warning dar permitem anunțul (pentru a nu pierde anunțuri valide)
                 if not offer_time:
                     no_date_count += 1
-                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării. Câmpuri disponibile: {list(offer.keys())[:10]}")
+                    self.logger.warning(f"Anunț {uid}: nu s-a putut determina data publicării. Câmpuri disponibile: {list(offer.keys())[:15]}")
                     # Permitem anunțul dacă nu putem determina data (pentru siguranță)
                 elif offer_time < self.min_time:
                     # Anunțul e prea vechi, îl ignorăm

@@ -27,6 +27,25 @@ class TelegramPipeline:
         else:
             self.state_data = {}
         
+        # Curățăm categoria "unknown" dacă există (migrare de la format vechi)
+        if "unknown" in self.state_data and self.category != "unknown":
+            unknown_data = self.state_data.get("unknown", [])
+            if isinstance(unknown_data, list) and len(unknown_data) > 0:
+                spider.logger.info(f"🔄 Găsită categorie 'unknown' cu {len(unknown_data)} anunțuri - migrare în progres...")
+                
+                # Dacă categoria curentă nu există sau e goală, mutăm datele din "unknown"
+                if self.category not in self.state_data or len(self.state_data.get(self.category, [])) == 0:
+                    spider.logger.info(f"  → Mutăm anunțurile din 'unknown' la categoria '{self.category}'")
+                    self.state_data[self.category] = unknown_data
+                    self.state_data.pop("unknown", None)
+                else:
+                    # Dacă categoria există deja, ștergem doar "unknown"
+                    spider.logger.info(f"  → Categoria '{self.category}' există deja, ștergem 'unknown'")
+                    self.state_data.pop("unknown", None)
+            else:
+                # "unknown" e goală, ștergem-o
+                self.state_data.pop("unknown", None)
+        
         category_list = self.state_data.get(self.category, [])
         if isinstance(category_list, list) and len(category_list) > 0:
             if isinstance(category_list[0], str):
@@ -129,6 +148,11 @@ class TelegramPipeline:
         ]
         category_list = sorted(category_list, key=lambda x: x.get("timestamp", ""), reverse=True)[:1000]
         self.state_data[category] = category_list
+        
+        # Ștergem definitiv "unknown" la final (în caz că mai există)
+        if "unknown" in self.state_data:
+            spider.logger.info(f"🧹 Curățare finală: ștergem categoria 'unknown' din state.json")
+            self.state_data.pop("unknown", None)
         
         self.state_file.write_text(json.dumps(self.state_data, indent=2))
         spider.logger.info(f"💾 Salvat state.json pentru categoria {category}: {len(category_list)} anunțuri (max 1000)")
